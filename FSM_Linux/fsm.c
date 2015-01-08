@@ -7,14 +7,16 @@
 // see LICENSE
 
 #include "util.h"
+#include <stdlib.h>
 
 #define CONNECT_TIMEOUT 1
 #define TRANSMIT_TIMEOUT 1
-#define RETRANSMIT_CHANCE 2
+#define RETRANSMIT_CHANCE 5
 
 #define NUM_STATE   4
 #define NUM_EVENT   9
 
+typedef enum {false, true} bool;
 enum pakcet_type { F_CON = 0, F_FIN = 1, F_ACK = 2, F_DATA = 3 };   // Packet Type
 enum proto_state { wait_CON = 0, CON_sent = 1, CONNECTED = 2, SENDING = 3 };     // States
 
@@ -120,13 +122,16 @@ static void send_data(void *p)
 }
 
 int retransmit_try = 0;
+bool keyinputAllow = false;
 static void resend_data(void *p)
 {
+    keyinputAllow = false;
     set_timer(0);           // Stop Timer
     printf("Resend Data to peer '%s' size:%d try:%d/%d\n",
         ((struct p_event*)p)->packet.data, ((struct p_event*)p)->size, ++retransmit_try, RETRANSMIT_CHANCE);
     send_packet(F_DATA, (struct p_event *)p, ((struct p_event *)p)->size);
     set_timer(TRANSMIT_TIMEOUT);
+    keyinputAllow = true;
 }
 
 static void resend_stop(void *p)
@@ -140,13 +145,21 @@ static void activate_resend(void *p)
 {
     set_timer(TRANSMIT_TIMEOUT);           // Stop Timer
 }
-
+char duplicated_data[MAX_DATA_SIZE] = "";
 static void report_data(void *p)
 {
     set_timer(0);           // Stop Timer
     send_packet(F_ACK, NULL, 0);
+    
+    // strcmp((struct p_event*)p->packet.data, duplicated_data)
+
+    if(!strcmp(((struct p_event*)p)->packet.data, duplicated_data))
+        return;
     printf("Data Arrived data='%s' size:%d\n",
         ((struct p_event*)p)->packet.data, ((struct p_event*)p)->packet.size);
+    sprintf(duplicated_data, "%s", ((struct p_event*)p)->packet.data);
+
+         // sprintf(event.packet.data, "%09d", data_count++);
 }
 
 struct state_action p_FSM[NUM_STATE][NUM_EVENT] = {
@@ -166,8 +179,6 @@ struct state_action p_FSM[NUM_STATE][NUM_EVENT] = {
    { NULL, CON_sent}},
 
   // - CONNECTED state
-  // {{ NULL, CONNECTED },        { close_con, wait_CON }, { NULL,      CONNECTED },      { report_data, CONNECTED },
-  //  { NULL, CONNECTED },        { close_con, wait_CON }, { send_data, CONNECTED },      { NULL,        CONNECTED }},
   {{ NULL, CONNECTED },        { close_con, wait_CON }, { NULL,      CONNECTED },      { report_data, CONNECTED },
    { NULL, CONNECTED },        { close_con, wait_CON }, { send_data,       SENDING },      { activate_resend, SENDING },
    { NULL, CONNECTED}},
@@ -175,7 +186,7 @@ struct state_action p_FSM[NUM_STATE][NUM_EVENT] = {
   // - SENDING state
   {{ NULL, SENDING },        { NULL, SENDING },             { resend_stop, CONNECTED },             { NULL, CONNECTED },
    { NULL, SENDING },        { close_con, wait_CON },       { NULL,  SENDING },             { resend_data, SENDING }, 
-   { NULL, CONNECTED}},
+   { resend_stop, CONNECTED}},
 };
 
 int data_count = 0;
@@ -186,7 +197,7 @@ struct p_event *get_event(void)
     
 loop:
     // Check if there is user command
-    if (!kbhit()) {
+    if (!kbhit() && keyinputAllow) {
         // Check if timer is timed-out
         if(timedout) {
             timedout = 0;
@@ -247,6 +258,7 @@ Protocol_Loop(void)
         if((eventp = get_event()) == NULL)
             break;
         printf("EVENT : %s\n",ev_name[eventp->event]);
+        
         /* Step 1: Do Action */
         if (p_FSM[c_state][eventp->event].action)
             p_FSM[c_state][eventp->event].action(eventp);
@@ -285,6 +297,7 @@ main(int argc, char *argv[])
 
     printf("Entering protocol loop...\n");
     printf("type number '[0]CONNECT', '[1]CLOSE', '[2]SEND', or '[3]QUIT'\n");
+    keyinputAllow = true;
     Protocol_Loop();
 
     // SIMULATOR_CLOSE
