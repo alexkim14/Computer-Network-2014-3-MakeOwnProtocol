@@ -8,24 +8,24 @@
 
 #include "util.h"
 
-#define CONNECT_TIMEOUT 5
-#define TRANSMIT_TIMEOUT 3
-#define RETRANSMIT_CHANCE 3
+#define CONNECT_TIMEOUT 1
+#define TRANSMIT_TIMEOUT 1
+#define RETRANSMIT_CHANCE 2
 
 #define NUM_STATE   4
-#define NUM_EVENT   8
+#define NUM_EVENT   9
 
 enum pakcet_type { F_CON = 0, F_FIN = 1, F_ACK = 2, F_DATA = 3 };   // Packet Type
-enum proto_state { wait_CON = 0, CON_sent = 1, CONNECTED = 2, retransmit_DATA = 3 };     // States
+enum proto_state { wait_CON = 0, CON_sent = 1, CONNECTED = 2, SENDING = 3 };     // States
 
 // Events
 enum proto_event { RCV_CON = 0, RCV_FIN = 1, RCV_ACK = 2, RCV_DATA = 3,
-                   CONNECT = 4, CLOSE = 5,   SEND = 6,    TIMEOUT = 7 };
+                   CONNECT = 4, CLOSE = 5,   SEND = 6,    TIMEOUT = 7,  GIVE_UP = 8 };
 
 char *pkt_name[] = { "F_CON", "F_FIN", "F_ACK", "F_DATA" };
-char *st_name[] =  { "wait_CON", "CON_sent", "CONNECTED", "retransmit_DATA" };
+char *st_name[] =  { "wait_CON", "CON_sent", "CONNECTED", "SENDING" };
 char *ev_name[] =  { "RCV_CON", "RCV_FIN", "RCV_ACK", "RCV_DATA",
-                     "CONNECT", "CLOSE",   "SEND",    "TIMEOUT"   };
+                     "CONNECT", "CLOSE",   "SEND",    "TIMEOUT",    "GIVE_UP" };
 
 struct state_action {           // Protocol FSM Structure
     void (* action)(void *p);
@@ -74,6 +74,7 @@ void set_timer(int sec)
     timer.it_interval.tv_usec = 0;
     setitimer (ITIMER_REAL, &timer, NULL);
 }
+
 void send_packet(int flag, void *p, int size)
 {
     struct packet pkt;
@@ -122,15 +123,28 @@ int retransmit_try = 0;
 static void resend_data(void *p)
 {
     set_timer(0);           // Stop Timer
-    printf("RRRRRRRRRRResend Data to peer '%s' size:%d try:%d/%d\n",
+    printf("Resend Data to peer '%s' size:%d try:%d/%d\n",
         ((struct p_event*)p)->packet.data, ((struct p_event*)p)->size, ++retransmit_try, RETRANSMIT_CHANCE);
     send_packet(F_DATA, (struct p_event *)p, ((struct p_event *)p)->size);
     set_timer(TRANSMIT_TIMEOUT);
 }
 
+static void resend_stop(void *p)
+{
+    set_timer(0);           // Stop Timer
+    retransmit_try = 0;
+    printf("Retransmit Finished\n");
+}
+
+static void activate_resend(void *p)
+{
+    set_timer(TRANSMIT_TIMEOUT);           // Stop Timer
+}
+
 static void report_data(void *p)
 {
     set_timer(0);           // Stop Timer
+    send_packet(F_ACK, NULL, 0);
     printf("Data Arrived data='%s' size:%d\n",
         ((struct p_event*)p)->packet.data, ((struct p_event*)p)->packet.size);
 }
@@ -139,24 +153,29 @@ struct state_action p_FSM[NUM_STATE][NUM_EVENT] = {
   //  for each event:
   //  RCV_CON,                 RCV_FIN,                 RCV_ACK,                       RCV_DATA,
   //  CONNECT,                 CLOSE,                   SEND,                          TIMEOUT
+  //  GIVE_UP,
 
   // - wait_CON state
   {{ passive_con, CONNECTED }, { NULL, wait_CON },      { NULL, wait_CON },            { NULL, wait_CON },
-   { active_con,  CON_sent },  { NULL, wait_CON },      { NULL, wait_CON },            { NULL, wait_CON }},
+   { active_con,  CON_sent },  { NULL, wait_CON },      { NULL, wait_CON },            { NULL, wait_CON },
+   { NULL, wait_CON}},
 
   // - CON_sent state
   {{ passive_con, CONNECTED }, { close_con, wait_CON }, { report_connect, CONNECTED }, { NULL,      CON_sent },
-   { NULL,        CON_sent },  { close_con, wait_CON }, { NULL,           CON_sent },  { close_con, wait_CON }},
+   { NULL,        CON_sent },  { close_con, wait_CON }, { NULL,           CON_sent },  { close_con, wait_CON },
+   { NULL, CON_sent}},
 
   // - CONNECTED state
   // {{ NULL, CONNECTED },        { close_con, wait_CON }, { NULL,      CONNECTED },      { report_data, CONNECTED },
   //  { NULL, CONNECTED },        { close_con, wait_CON }, { send_data, CONNECTED },      { NULL,        CONNECTED }},
   {{ NULL, CONNECTED },        { close_con, wait_CON }, { NULL,      CONNECTED },      { report_data, CONNECTED },
-   { NULL, CONNECTED },        { close_con, wait_CON }, { send_data, CONNECTED },      { resend_data, CONNECTED }},
+   { NULL, CONNECTED },        { close_con, wait_CON }, { send_data,       SENDING },      { activate_resend, SENDING },
+   { NULL, CONNECTED}},
 
-  // - RETRANSMIT state
-  {{ NULL, CONNECTED },        { NULL, CONNECTED },     { NULL,      CONNECTED },      { NULL, CONNECTED },
-   { NULL, CONNECTED },        { close_con, wait_CON }, { NULL,      CONNECTED },      { resend_data, CONNECTED }},
+  // - SENDING state
+  {{ NULL, SENDING },        { NULL, SENDING },             { resend_stop, CONNECTED },             { NULL, CONNECTED },
+   { NULL, SENDING },        { close_con, wait_CON },       { NULL,  SENDING },             { resend_data, SENDING }, 
+   { NULL, CONNECTED}},
 };
 
 int data_count = 0;
@@ -171,7 +190,13 @@ loop:
         // Check if timer is timed-out
         if(timedout) {
             timedout = 0;
-            event.event = TIMEOUT;
+            if(retransmit_try < RETRANSMIT_CHANCE) {
+                event.event = TIMEOUT;
+            } else {
+                printf("Give Up point %d\n", retransmit_try);
+                retransmit_try = 0;
+                event.event = GIVE_UP;
+            }
         } else {
             // Check Packet arrival by event_wait()
             ssize_t n = Recv((char*)&event.packet, sizeof(struct packet));
