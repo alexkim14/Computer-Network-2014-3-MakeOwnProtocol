@@ -11,7 +11,7 @@
 
 #define CONNECT_TIMEOUT 1
 #define TRANSMIT_TIMEOUT 1
-#define RETRANSMIT_CHANCE 5
+#define RETRANSMIT_CHANCE 10
 
 #define NUM_STATE   4
 #define NUM_EVENT   9
@@ -112,9 +112,10 @@ static void close_con(void *p)
     send_packet(F_FIN, NULL, 0);
     printf("Connection Closed\n");
 }
-
+bool keyinputAllow = false;
 static void send_data(void *p)
 {
+    keyinputAllow = false;
     printf("Send Data to peer '%s' size:%d\n",
         ((struct p_event*)p)->packet.data, ((struct p_event*)p)->size);
     send_packet(F_DATA, (struct p_event *)p, ((struct p_event *)p)->size);
@@ -122,7 +123,6 @@ static void send_data(void *p)
 }
 
 int retransmit_try = 0;
-bool keyinputAllow = false;
 static void resend_data(void *p)
 {
     keyinputAllow = false;
@@ -131,7 +131,6 @@ static void resend_data(void *p)
         ((struct p_event*)p)->packet.data, ((struct p_event*)p)->size, ++retransmit_try, RETRANSMIT_CHANCE);
     send_packet(F_DATA, (struct p_event *)p, ((struct p_event *)p)->size);
     set_timer(TRANSMIT_TIMEOUT);
-    keyinputAllow = true;
 }
 
 static void resend_stop(void *p)
@@ -139,6 +138,7 @@ static void resend_stop(void *p)
     set_timer(0);           // Stop Timer
     retransmit_try = 0;
     printf("Retransmit Finished\n");
+    keyinputAllow = true;
 }
 
 static void activate_resend(void *p)
@@ -148,18 +148,15 @@ static void activate_resend(void *p)
 char duplicated_data[MAX_DATA_SIZE] = "";
 static void report_data(void *p)
 {
+    keyinputAllow = true;
     set_timer(0);           // Stop Timer
     send_packet(F_ACK, NULL, 0);
     
-    // strcmp((struct p_event*)p->packet.data, duplicated_data)
-
     if(!strcmp(((struct p_event*)p)->packet.data, duplicated_data))
         return;
     printf("Data Arrived data='%s' size:%d\n",
         ((struct p_event*)p)->packet.data, ((struct p_event*)p)->packet.size);
     sprintf(duplicated_data, "%s", ((struct p_event*)p)->packet.data);
-
-         // sprintf(event.packet.data, "%09d", data_count++);
 }
 
 struct state_action p_FSM[NUM_STATE][NUM_EVENT] = {
@@ -184,7 +181,7 @@ struct state_action p_FSM[NUM_STATE][NUM_EVENT] = {
    { NULL, CONNECTED}},
 
   // - SENDING state
-  {{ NULL, SENDING },        { NULL, SENDING },             { resend_stop, CONNECTED },             { NULL, CONNECTED },
+  {{ NULL, SENDING },        { NULL, SENDING },             { resend_stop, CONNECTED },             { report_data, CONNECTED },
    { NULL, SENDING },        { close_con, wait_CON },       { NULL,  SENDING },             { resend_data, SENDING }, 
    { resend_stop, CONNECTED}},
 };
@@ -197,7 +194,7 @@ struct p_event *get_event(void)
     
 loop:
     // Check if there is user command
-    if (!kbhit() && keyinputAllow) {
+    if (!kbhit()) {
         // Check if timer is timed-out
         if(timedout) {
             timedout = 0;
@@ -233,6 +230,7 @@ loop:
             case '0': event.event = CONNECT; break;
             case '1': event.event = CLOSE;   break;
             case '2':
+                if(keyinputAllow == false) goto loop;
                 event.event = SEND;
                 sprintf(event.packet.data, "%09d", data_count++);
                 event.size = strlen(event.packet.data) + 1;
