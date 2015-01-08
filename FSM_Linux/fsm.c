@@ -149,7 +149,7 @@ char duplicated_data[MAX_DATA_SIZE] = "";
 static void report_data(void *p)
 {
     keyinputAllow = true;
-    set_timer(0);           // Stop Timer
+    // set_timer(0);           // Stop Timer
     send_packet(F_ACK, NULL, 0);
     
     if(!strcmp(((struct p_event*)p)->packet.data, duplicated_data))
