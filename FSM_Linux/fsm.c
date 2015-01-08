@@ -9,19 +9,21 @@
 #include "util.h"
 
 #define CONNECT_TIMEOUT 5
+#define TRANSMIT_TIMEOUT 3
+#define RETRANSMIT_CHANCE 3
 
-#define NUM_STATE   3
+#define NUM_STATE   4
 #define NUM_EVENT   8
 
 enum pakcet_type { F_CON = 0, F_FIN = 1, F_ACK = 2, F_DATA = 3 };   // Packet Type
-enum proto_state { wait_CON = 0, CON_sent = 1, CONNECTED = 2 };     // States
+enum proto_state { wait_CON = 0, CON_sent = 1, CONNECTED = 2, retransmit_DATA = 3 };     // States
 
 // Events
 enum proto_event { RCV_CON = 0, RCV_FIN = 1, RCV_ACK = 2, RCV_DATA = 3,
                    CONNECT = 4, CLOSE = 5,   SEND = 6,    TIMEOUT = 7 };
 
 char *pkt_name[] = { "F_CON", "F_FIN", "F_ACK", "F_DATA" };
-char *st_name[] =  { "wait_CON", "CON_sent", "CONNECTED" };
+char *st_name[] =  { "wait_CON", "CON_sent", "CONNECTED", "retransmit_DATA" };
 char *ev_name[] =  { "RCV_CON", "RCV_FIN", "RCV_ACK", "RCV_DATA",
                      "CONNECT", "CLOSE",   "SEND",    "TIMEOUT"   };
 
@@ -113,10 +115,22 @@ static void send_data(void *p)
     printf("Send Data to peer '%s' size:%d\n",
         ((struct p_event*)p)->packet.data, ((struct p_event*)p)->size);
     send_packet(F_DATA, (struct p_event *)p, ((struct p_event *)p)->size);
+    set_timer(TRANSMIT_TIMEOUT);
+}
+
+int retransmit_try = 0;
+static void resend_data(void *p)
+{
+    set_timer(0);           // Stop Timer
+    printf("RRRRRRRRRRResend Data to peer '%s' size:%d try:%d/%d\n",
+        ((struct p_event*)p)->packet.data, ((struct p_event*)p)->size, ++retransmit_try, RETRANSMIT_CHANCE);
+    send_packet(F_DATA, (struct p_event *)p, ((struct p_event *)p)->size);
+    set_timer(TRANSMIT_TIMEOUT);
 }
 
 static void report_data(void *p)
 {
+    set_timer(0);           // Stop Timer
     printf("Data Arrived data='%s' size:%d\n",
         ((struct p_event*)p)->packet.data, ((struct p_event*)p)->packet.size);
 }
@@ -135,8 +149,14 @@ struct state_action p_FSM[NUM_STATE][NUM_EVENT] = {
    { NULL,        CON_sent },  { close_con, wait_CON }, { NULL,           CON_sent },  { close_con, wait_CON }},
 
   // - CONNECTED state
+  // {{ NULL, CONNECTED },        { close_con, wait_CON }, { NULL,      CONNECTED },      { report_data, CONNECTED },
+  //  { NULL, CONNECTED },        { close_con, wait_CON }, { send_data, CONNECTED },      { NULL,        CONNECTED }},
   {{ NULL, CONNECTED },        { close_con, wait_CON }, { NULL,      CONNECTED },      { report_data, CONNECTED },
-   { NULL, CONNECTED },        { close_con, wait_CON }, { send_data, CONNECTED },      { NULL,        CONNECTED }},
+   { NULL, CONNECTED },        { close_con, wait_CON }, { send_data, CONNECTED },      { resend_data, CONNECTED }},
+
+  // - RETRANSMIT state
+  {{ NULL, CONNECTED },        { NULL, CONNECTED },     { NULL,      CONNECTED },      { NULL, CONNECTED },
+   { NULL, CONNECTED },        { close_con, wait_CON }, { NULL,      CONNECTED },      { resend_data, CONNECTED }},
 };
 
 int data_count = 0;
