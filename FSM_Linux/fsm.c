@@ -230,7 +230,8 @@ loop:
             case '0': event.event = CONNECT; break;
             case '1': event.event = CLOSE;   break;
             case '2':
-                if(keyinputAllow == false) goto loop;
+                if(keyinputAllow == false)
+                    goto loop;
                 event.event = SEND;
                 sprintf(event.packet.data, "%09d", data_count++);
                 event.size = strlen(event.packet.data) + 1;
