@@ -112,13 +112,19 @@ static void close_con(void *p)
     send_packet(F_FIN, NULL, 0);
     printf("Connection Closed\n");
 }
+
 bool keyinputAllow = false;
+char most_recent_sent_data[MAX_DATA_SIZE] = "";
+int most_recent_sent_data_size;
+
 static void send_data(void *p)
 {
     keyinputAllow = false;
     printf("Send Data to peer '%s' size:%d\n",
         ((struct p_event*)p)->packet.data, ((struct p_event*)p)->size);
     send_packet(F_DATA, (struct p_event *)p, ((struct p_event *)p)->size);
+    sprintf(most_recent_sent_data, "%s", ((struct p_event*)p)->packet.data);
+    most_recent_sent_data_size = ((struct p_event *)p)->size;
     set_timer(TRANSMIT_TIMEOUT);
 }
 
@@ -128,7 +134,11 @@ static void resend_data(void *p)
     keyinputAllow = false;
     set_timer(0);           // Stop Timer
     printf("Resend Data to peer '%s' size:%d try:%d/%d\n",
-        ((struct p_event*)p)->packet.data, ((struct p_event*)p)->size, ++retransmit_try, RETRANSMIT_CHANCE);
+        most_recent_sent_data, most_recent_sent_data_size, ++retransmit_try, RETRANSMIT_CHANCE);
+
+    sprintf(((struct p_event*)p)->packet.data, "%s", most_recent_sent_data);
+    ((struct p_event*)p)->size = most_recent_sent_data_size;
+
     send_packet(F_DATA, (struct p_event *)p, ((struct p_event *)p)->size);
     set_timer(TRANSMIT_TIMEOUT);
 }
@@ -145,11 +155,11 @@ static void activate_resend(void *p)
 {
     set_timer(TRANSMIT_TIMEOUT);           // Stop Timer
 }
+
 char duplicated_data[MAX_DATA_SIZE] = "";
 static void report_data(void *p)
 {
     keyinputAllow = true;
-    // set_timer(0);           // Stop Timer
     send_packet(F_ACK, NULL, 0);
     
     if(!strcmp(((struct p_event*)p)->packet.data, duplicated_data))
@@ -201,7 +211,6 @@ loop:
             if(retransmit_try < RETRANSMIT_CHANCE) {
                 event.event = TIMEOUT;
             } else {
-                printf("Give Up point %d\n", retransmit_try);
                 retransmit_try = 0;
                 event.event = GIVE_UP;
             }
