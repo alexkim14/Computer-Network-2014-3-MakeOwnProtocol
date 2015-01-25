@@ -22,12 +22,14 @@ enum proto_state { wait_CON = 0, CON_sent = 1, CONNECTED = 2, SENDING = 3 };    
 
 // Events
 enum proto_event { RCV_CON = 0, RCV_FIN = 1, RCV_ACK = 2, RCV_DATA = 3,
-                   CONNECT = 4, CLOSE = 5,   SEND = 6,    TIMEOUT = 7,  GIVE_UP = 8 };
+                   CONNECT = 4, CLOSE = 5,   SEND = 6,    TIMEOUT = 7,
+                   GIVE_UP = 8 };
 
 char *pkt_name[] = { "F_CON", "F_FIN", "F_ACK", "F_DATA" };
 char *st_name[] =  { "wait_CON", "CON_sent", "CONNECTED", "SENDING" };
 char *ev_name[] =  { "RCV_CON", "RCV_FIN", "RCV_ACK", "RCV_DATA",
-                     "CONNECT", "CLOSE",   "SEND",    "TIMEOUT",    "GIVE_UP" };
+                     "CONNECT", "CLOSE",   "SEND",    "TIMEOUT",
+                     "GIVE_UP" };
 
 struct state_action {           // Protocol FSM Structure
     void (* action)(void *p);
@@ -187,12 +189,12 @@ struct state_action p_FSM[NUM_STATE][NUM_EVENT] = {
 
   // - CONNECTED state
   {{ NULL, CONNECTED },        { close_con, wait_CON }, { NULL,      CONNECTED },      { report_data, CONNECTED },
-   { NULL, CONNECTED },        { close_con, wait_CON }, { send_data,       SENDING },      { activate_resend, SENDING },
+   { NULL, CONNECTED },        { close_con, wait_CON }, { send_data,   SENDING },      { activate_resend, SENDING },
    { NULL, CONNECTED}},
 
   // - SENDING state
-  {{ NULL, SENDING },        { NULL, SENDING },             { resend_stop, CONNECTED },             { report_data, CONNECTED },
-   { NULL, SENDING },        { close_con, wait_CON },       { NULL,  SENDING },             { resend_data, SENDING }, 
+  {{ NULL, SENDING },        { NULL, SENDING },         { resend_stop, CONNECTED },    { report_data, CONNECTED },
+   { NULL, SENDING },        { close_con, wait_CON },   { NULL,  SENDING },            { resend_data, SENDING }, 
    { resend_stop, CONNECTED}},
 };
 
@@ -312,4 +314,3 @@ main(int argc, char *argv[])
 
     return 0;
 }
-
